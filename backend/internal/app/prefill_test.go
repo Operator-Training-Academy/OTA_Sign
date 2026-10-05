@@ -49,3 +49,35 @@ func TestDocuSealPrefillValuesNameRankOrdering(t *testing.T) {
 		}
 	}
 }
+
+func TestUserFromKeycloakClaimsRequiresOTAIdentity(t *testing.T) {
+	cfg := Config{
+		KeycloakDoDIDClaim:     "dod_id",
+		KeycloakUICClaim:       "uic",
+		KeycloakRankClaim:      "rank",
+		KeycloakArmyEmailClaim: "army_email",
+	}
+	claims := map[string]any{
+		"name":        "Jane Example",
+		"given_name":  "Jane",
+		"family_name": "Example",
+		"email":       "jane.example@example.mil",
+		"dod_id":      "1234567890",
+		"uic":         "WABC12",
+		"rank":        "SGT",
+		"army_email":  "jane.example@army.mil",
+	}
+
+	user, err := userFromKeycloakClaims(cfg, "https://keycloak.example.mil/realms/ota", "subject-1", claims)
+	if err != nil {
+		t.Fatalf("expected valid Keycloak claims, got %v", err)
+	}
+	if user.DoDID != "1234567890" || user.UIC != "WABC12" || user.ArmyEmail != "jane.example@army.mil" {
+		t.Fatalf("unexpected mapped Keycloak user: %#v", user)
+	}
+
+	delete(claims, "dod_id")
+	if _, err := userFromKeycloakClaims(cfg, "https://keycloak.example.mil/realms/ota", "subject-1", claims); err == nil {
+		t.Fatal("expected missing DoD ID claim to be rejected")
+	}
+}

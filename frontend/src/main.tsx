@@ -17,10 +17,7 @@ import './styles.css';
 
 const runtimeConfig = window.__OTASIGN_CONFIG__ ?? {};
 const API_BASE = runtimeConfig.apiBaseUrl ?? import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8080';
-const MOODLE_LOGIN_URL =
-  runtimeConfig.moodleLoginUrl ?? import.meta.env.VITE_MOODLE_LOGIN_URL ?? 'http://localhost:8081/login/index.php';
-const MOODLE_LAUNCH_URL =
-  runtimeConfig.moodleLaunchUrl ?? import.meta.env.VITE_MOODLE_LAUNCH_URL ?? MOODLE_LOGIN_URL;
+const LOGIN_URL = `${API_BASE}/auth/login`;
 const REFRESH_INTERVAL_MS = 12000;
 const THEME_STORAGE_KEY = 'otasign-theme';
 
@@ -107,7 +104,7 @@ function App() {
         setTemplates(nextTemplates);
         setMySubmissions(nextSubmissions);
       })
-      .catch(() => setError('You need to launch OTA Sign from Moodle.'))
+      .catch(() => setError('Sign in with your organization account to access OTA Sign.'))
       .finally(() => setLoading(false));
   }, []);
 
@@ -248,6 +245,12 @@ function App() {
     [refreshUnitSubmissions],
   );
 
+  const signOut = React.useCallback(() => {
+    fetch(`${API_BASE}/auth/logout`, { method: 'POST', credentials: 'include' })
+      .catch(() => undefined)
+      .finally(() => window.location.assign('/'));
+  }, []);
+
   if (loading) {
     return <main className="centered">Loading OTA Sign...</main>;
   }
@@ -257,10 +260,10 @@ function App() {
       <main className="centered">
         <section className="emptyState">
           <ShieldCheck size={34} />
-          <h1>Launch Required</h1>
+          <h1>Sign In Required</h1>
           <p>{error}</p>
-          <a className="primaryLink" href={MOODLE_LAUNCH_URL}>
-            Launch From Moodle
+          <a className="primaryLink" href={LOGIN_URL}>
+            Sign In
           </a>
         </section>
       </main>
@@ -275,6 +278,9 @@ function App() {
           <h1>Forms Portal</h1>
         </div>
         <div className="topActions">
+          <button className="iconButton" onClick={signOut}>
+            Sign out
+          </button>
           <ThemeControl themePreference={themePreference} setThemePreference={setThemePreference} />
           <div className="identity">
             <strong>{user.full_name}</strong>

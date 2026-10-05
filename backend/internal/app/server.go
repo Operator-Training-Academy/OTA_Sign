@@ -25,6 +25,8 @@ type Server struct {
 	store         *Store
 	docuseal      *DocuSealClient
 	notifications *NotificationClient
+	keycloak      *KeycloakClient
+	moodleAccess  *MoodleAccessClient
 }
 
 func NewServer(cfg Config) (*Server, error) {
@@ -37,12 +39,25 @@ func NewServer(cfg Config) (*Server, error) {
 		return nil, err
 	}
 
-	return &Server{
+	server := &Server{
 		cfg:           cfg,
 		store:         store,
 		docuseal:      NewDocuSealClient(cfg),
 		notifications: NewNotificationClient(cfg),
-	}, nil
+	}
+	if cfg.AuthProvider == "keycloak" {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		keycloak, err := NewKeycloakClient(ctx, cfg)
+		if err != nil {
+			store.Close()
+			return nil, err
+		}
+		server.keycloak = keycloak
+		server.moodleAccess = NewMoodleAccessClient(cfg)
+	}
+
+	return server, nil
 }
 
 func (s *Server) Routes() http.Handler {
@@ -52,6 +67,9 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /readyz", s.handleReady)
 	mux.HandleFunc("GET /healthz/full", s.handleFullHealth)
 	mux.HandleFunc("GET /launch", s.handleLaunch)
+	mux.HandleFunc("GET /auth/login", s.handleLogin)
+	mux.HandleFunc("GET /auth/keycloak/callback", s.handleKeycloakCallback)
+	mux.HandleFunc("POST /auth/logout", s.handleLogout)
 	mux.HandleFunc("POST /webhooks/docuseal", s.handleDocuSealWebhook)
 	mux.HandleFunc("POST /dev/launch-token", s.handleDevLaunchToken)
 	mux.HandleFunc("GET /api/me", s.withAuth(s.handleMe))
@@ -128,6 +146,10 @@ func (s *Server) handleFullHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleLaunch(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.AuthProvider != "moodle" {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "disabled"})
+		return
+	}
 	token := r.URL.Query().Get("token")
 	claims, err := VerifyLaunchToken(token, s.cfg.MoodleLaunchSigningSecret, time.Now().UTC())
 	if err != nil {
@@ -162,6 +184,79 @@ func (s *Server) handleLaunch(w http.ResponseWriter, r *http.Request) {
 	s.setSessionCookie(w, sessionID)
 
 	http.Redirect(w, r, s.cfg.FrontendURL+"/dashboard", http.StatusFound)
+}
+
+func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.AuthProvider == "moodle" {
+		http.Redirect(w, r, s.cfg.MoodleLoginURL, http.StatusFound)
+		return
+	}
+	url, err := s.keycloak.authorizationURL(w)
+	if err != nil {
+		log.Printf("create Keycloak authorization request failed: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not start login"})
+		return
+	}
+	http.Redirect(w, r, url, http.StatusFound)
+}
+
+func (s *Server) handleKeycloakCallback(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.AuthProvider != "keycloak" {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "disabled"})
+		return
+	}
+	defer s.keycloak.clearState(w)
+	if providerError := strings.TrimSpace(r.URL.Query().Get("error")); providerError != "" {
+		log.Printf("Keycloak login rejected: %s", providerError)
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "Keycloak login was not completed"})
+		return
+	}
+
+	user, err := s.keycloak.exchange(r)
+	if err != nil {
+		log.Printf("Keycloak login rejected: %v", err)
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "Keycloak identity could not be verified"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
+	defer cancel()
+	capabilities, err := s.moodleAccess.Capabilities(ctx, user.DoDID)
+	if err != nil {
+		log.Printf("Moodle authorization lookup failed: %v", err)
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "Moodle did not authorize OTA Sign access"})
+		return
+	}
+	user.Capabilities = capabilities
+	s.enrichPayGradeFromRank(ctx, &user)
+
+	sessionID := randomID()
+	if err := s.store.SaveSession(ctx, sessionID, user); err != nil {
+		log.Printf("save Keycloak session failed: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not start session"})
+		return
+	}
+	s.setSessionCookie(w, sessionID)
+	http.Redirect(w, r, s.cfg.FrontendURL+"/dashboard", http.StatusFound)
+}
+
+func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	if cookie, err := r.Cookie(s.cfg.SessionCookieName); err == nil {
+		if err := s.store.DeleteSession(r.Context(), cookie.Value); err != nil {
+			log.Printf("delete session failed: %v", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not sign out"})
+			return
+		}
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     s.cfg.SessionCookieName,
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   s.cfg.SessionCookieSecure,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   -1,
+	})
+	writeJSON(w, http.StatusOK, map[string]string{"status": "signed out"})
 }
 
 func (s *Server) handleDevLaunchToken(w http.ResponseWriter, r *http.Request) {

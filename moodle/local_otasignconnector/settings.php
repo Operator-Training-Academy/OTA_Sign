@@ -13,7 +13,7 @@ if ($hassiteconfig) {
         'local_otasignconnector/launch_url',
         get_string('launch_url', 'local_otasignconnector'),
         get_string('launch_url_desc', 'local_otasignconnector'),
-        'http://localhost:8080/launch',
+        'http://localhost:8080/auth/login',
         PARAM_URL
     ));
 

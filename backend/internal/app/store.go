@@ -160,6 +160,8 @@ func (s *Store) SaveSession(ctx context.Context, sessionID string, user User) er
 	if err := tx.QueryRowContext(ctx, `
 		INSERT INTO users (
 			moodle_user_id,
+			keycloak_issuer,
+			keycloak_subject,
 			full_name,
 			first_name,
 			last_name,
@@ -170,8 +172,10 @@ func (s *Store) SaveSession(ctx context.Context, sessionID string, user User) er
 			rank,
 			pay_grade
 		)
-		VALUES ($1, $2, nullif($3, ''), nullif($4, ''), nullif($5, ''), $6, nullif($7, ''), nullif($8, ''), nullif($9, ''), nullif($10, ''))
+		VALUES ($1, nullif($2, ''), nullif($3, ''), $4, nullif($5, ''), nullif($6, ''), nullif($7, ''), $8, nullif($9, ''), nullif($10, ''), nullif($11, ''), nullif($12, ''))
 		ON CONFLICT (moodle_user_id) DO UPDATE SET
+			keycloak_issuer = EXCLUDED.keycloak_issuer,
+			keycloak_subject = EXCLUDED.keycloak_subject,
 			full_name = EXCLUDED.full_name,
 			first_name = EXCLUDED.first_name,
 			last_name = EXCLUDED.last_name,
@@ -183,7 +187,15 @@ func (s *Store) SaveSession(ctx context.Context, sessionID string, user User) er
 			pay_grade = EXCLUDED.pay_grade,
 			updated_at = now()
 		RETURNING id::text
-	`, user.MoodleUserID, user.FullName, user.FirstName, user.LastName, user.MiddleInitial, user.Email, user.ArmyEmail, user.DoDID, user.Rank, user.PayGrade).Scan(&userID); err != nil {
+	`, user.MoodleUserID, user.KeycloakIssuer, user.KeycloakSubject, user.FullName, user.FirstName, user.LastName, user.MiddleInitial, user.Email, user.ArmyEmail, user.DoDID, user.Rank, user.PayGrade).Scan(&userID); err != nil {
+		return err
+	}
+	// The current identity claims are authoritative for this login. Do not leave
+	// revoked capabilities or a previous UIC attached to a new session.
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM user_unit_roles
+		WHERE user_id = $1::uuid
+	`, userID); err != nil {
 		return err
 	}
 
@@ -242,6 +254,8 @@ func (s *Store) UserForSession(ctx context.Context, sessionID string) (User, boo
 		SELECT
 			u.id::text,
 			u.moodle_user_id,
+			coalesce(u.keycloak_issuer, ''),
+			coalesce(u.keycloak_subject, ''),
 			u.full_name,
 			coalesce(u.first_name, ''),
 			coalesce(u.last_name, ''),
@@ -265,6 +279,8 @@ func (s *Store) UserForSession(ctx context.Context, sessionID string) (User, boo
 	`, sessionID).Scan(
 		&user.ID,
 		&user.MoodleUserID,
+		&user.KeycloakIssuer,
+		&user.KeycloakSubject,
 		&user.FullName,
 		&user.FirstName,
 		&user.LastName,
@@ -293,6 +309,14 @@ func (s *Store) UserForSession(ctx context.Context, sessionID string) (User, boo
 	}
 
 	return user, true, nil
+}
+
+func (s *Store) DeleteSession(ctx context.Context, sessionID string) error {
+	_, err := s.db.ExecContext(ctx, `
+		DELETE FROM sessions
+		WHERE id = $1
+	`, sessionID)
+	return err
 }
 
 func (s *Store) TemplatesForUser(ctx context.Context, user User) ([]Template, error) {
