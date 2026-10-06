@@ -12,7 +12,6 @@ if (!webhookUrl) {
 }
 
 const portalUrl = trimRight(env.FRONTEND_URL || 'https://sign.example.com', '/');
-const launchUrl = env.MOODLE_OTA_SIGN_LAUNCH_URL || 'https://moodle.example.com/local/otasignconnector/launch.php';
 
 const baseSubmission = {
   id: 'demo-submission-id',
@@ -47,7 +46,6 @@ const events = [
     },
     metadata: {
       portal_url: portalUrl,
-      launch_url: launchUrl,
       demo: 'true',
     },
   },
@@ -79,7 +77,6 @@ const events = [
     },
     metadata: {
       portal_url: portalUrl,
-      launch_url: launchUrl,
       demo: 'true',
     },
   },

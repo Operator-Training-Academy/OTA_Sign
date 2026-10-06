@@ -3,14 +3,13 @@
 ## System Roles
 
 ```text
-Moodle
+Keycloak
 - Login and identity
-- User profile data such as UIC
-- Moodle roles/capabilities
-- Launch point into OTA Sign
+- DoD ID, UIC, rank, name, and email claims
 
 OTA Sign Backend
-- Validates Moodle launch tokens
+- Validates Keycloak OIDC tokens
+- Maps Keycloak client roles to OTA Sign capabilities
 - Owns sessions and permissions
 - Stores users, UIC roles, templates, submissions, signer state, and audit events
 - Talks to DocuSeal API
@@ -32,26 +31,18 @@ DocuSeal
 ## Launch Flow
 
 ```text
-1. User logs into Moodle.
-2. User clicks Open OTA Sign.
-3. Moodle plugin builds a launch payload:
-   - moodle_user_id
-   - full_name
-   - email
-   - uic
-   - roles/capabilities
-   - issued_at
-   - expires_at
-4. Moodle signs the payload with HMAC-SHA256.
-5. Moodle redirects to OTA Sign:
-   /launch?token=<base64url(payload)>.<base64url(signature)>
-6. Backend validates the token and creates a secure session.
+1. User opens OTA Sign.
+2. OTA Sign redirects the user to Keycloak.
+3. Keycloak returns a signed ID token containing the user identity attributes.
+4. OTA Sign validates issuer, signature, audience, expiry, state, nonce, and PKCE.
+5. OTA Sign maps validated `ota-sign` client roles to capabilities and uses the UIC claim as the authorization scope.
+6. Backend creates a secure session.
 7. Frontend loads /api/me and dashboard data from the backend.
 ```
 
 ## Security Rules
 
-- The frontend never receives Moodle signing secrets, DocuSeal API keys, SMTP credentials, or database credentials.
+- The frontend never receives Keycloak client secrets, DocuSeal API keys, SMTP credentials, or database credentials.
 - Every frontend request goes to the OTA Sign backend.
 - Backend permission checks are UIC-scoped.
 - A commander or commander representative can only see users and submissions for authorized UICs.

@@ -7,7 +7,7 @@ OTA Sign production has these critical dependencies:
 - OTA Sign backend container
 - OTA Sign frontend container
 - PostgreSQL database
-- Moodle OTA Sign Connector
+- Keycloak OIDC client and role mappings
 - DocuSeal API and webhooks
 - Reverse proxy / TLS entrypoint
 - Optional notification webhook target
@@ -15,16 +15,16 @@ OTA Sign production has these critical dependencies:
 ## Deployment Checklist
 
 1. Push a committed branch to GitHub.
-2. Confirm CI passes for backend, frontend, and Moodle plugin checks.
+2. Confirm CI passes for backend and frontend checks.
 3. Create and push a version tag such as `v1.0.0`.
 4. Confirm GHCR images exist for the intended `OTASIGN_IMAGE_TAG`.
-5. Confirm the Moodle plugin zip is attached to the GitHub Release as `otasignconnector-YYYYMMDDNN.zip`, matching `$plugin->version`.
-6. Set production stack variables in Portainer or the deployment environment:
+5. Set production stack variables in Portainer or the deployment environment:
    - `OTASIGN_IMAGE_TAG`
    - `OTASIGN_FRONTEND_URL` for the OTA Sign public URL, also used as frontend `OTASIGN_API_BASE_URL` when backend routes share the same host
-   - `MOODLE_LOGIN_URL`
-   - `MOODLE_OTA_SIGN_LAUNCH_URL`
-   - `MOODLE_LAUNCH_SIGNING_SECRET`
+    - `KEYCLOAK_ISSUER_URL`
+    - `KEYCLOAK_CLIENT_ID`
+    - `KEYCLOAK_CLIENT_SECRET`
+    - `KEYCLOAK_REDIRECT_URL`
    - `DATABASE_URL`
    - `DOCUSEAL_URL`
    - `DOCUSEAL_PUBLIC_URL`
@@ -33,28 +33,11 @@ OTA Sign production has these critical dependencies:
    - `NOTIFICATION_WEBHOOK_URL` if used
    - `NOTIFICATION_WEBHOOK_SECRET` if used
    - Start from `.env.prod.example` when using Docker Compose or Portainer env-file style variables.
-7. Deploy `docker-compose.prod.example.yml` as the production stack.
-8. Confirm `/readyz` returns `200`.
-9. Confirm `/healthz/full` reports database and DocuSeal status.
-10. Launch from Moodle with a test account.
-11. Create a DocuSeal submission, complete it, receive the webhook, and download the completed PDF through OTA Sign.
-
-## Moodle Plugin Release
-
-Pushing a version tag packages `moodle/local_otasignconnector` as a Moodle-ready zip named from Moodle's `$plugin->version`, for example `otasignconnector-2026071000.zip`, with this layout:
-
-```text
-otasignconnector/
-  version.php
-  launch.php
-  ...
-```
-
-The release asset should be installed into Moodle as:
-
-```text
-local/otasignconnector
-```
+6. Deploy `docker-compose.prod.example.yml` as the production stack.
+7. Confirm `/readyz` returns `200`.
+8. Confirm `/healthz/full` reports database and DocuSeal status.
+9. Sign in through Keycloak with a test account that has `viewown`.
+10. Create a DocuSeal submission, complete it, receive the webhook, and download the completed PDF through OTA Sign.
 
 ## Reverse Proxy Routing
 
@@ -134,7 +117,7 @@ Recovery drill:
 
 Review backend logs for:
 
-- `moodle launch rejected`
+- `Keycloak login rejected`
 - `docuseal template sync failed`
 - `docuseal create submission failed`
 - `docuseal webhook rejected`
@@ -170,13 +153,12 @@ OTASIGN_BACKEND_URL=https://sign.example.com ./scripts/healthcheck.sh
 
 Rotate secrets one at a time and verify the system between each rotation.
 
-Moodle launch signing secret:
+Keycloak client secret:
 
-1. Generate a new high-entropy secret.
-2. Update `MOODLE_LAUNCH_SIGNING_SECRET` in the backend stack.
-3. Update the same secret in the Moodle OTA Sign Connector settings.
-4. Redeploy backend.
-5. Launch from Moodle and confirm a session starts.
+1. Generate a new client secret in Keycloak.
+2. Update `KEYCLOAK_CLIENT_SECRET` in the backend stack.
+3. Redeploy backend.
+4. Sign in through Keycloak and confirm a session starts.
 
 DocuSeal API key:
 
@@ -214,7 +196,7 @@ Bad deployment:
 1. Set `OTASIGN_IMAGE_TAG` to the last known good image tag.
 2. Redeploy the stack.
 3. Confirm health endpoints.
-4. Run a Moodle launch smoke test.
+4. Run a Keycloak login smoke test with `viewown` and a denial test without it.
 
 Database loss:
 

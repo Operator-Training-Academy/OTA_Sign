@@ -2,7 +2,7 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 CREATE TABLE IF NOT EXISTS users (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    moodle_user_id TEXT NOT NULL UNIQUE,
+    identity_user_id TEXT NOT NULL UNIQUE,
     full_name TEXT NOT NULL,
     first_name TEXT,
     last_name TEXT,
@@ -51,7 +51,7 @@ CREATE TABLE IF NOT EXISTS user_unit_roles (
     user_id UUID NOT NULL REFERENCES users(id),
     unit_id UUID NOT NULL REFERENCES units(id),
     role TEXT NOT NULL,
-    source TEXT NOT NULL DEFAULT 'moodle',
+    source TEXT NOT NULL DEFAULT 'keycloak',
     expires_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),

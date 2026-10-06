@@ -18,7 +18,6 @@ type NotificationClient struct {
 	webhookURL string
 	secret     string
 	portalURL  string
-	launchURL  string
 	httpClient *http.Client
 }
 
@@ -36,7 +35,6 @@ func NewNotificationClient(cfg Config) *NotificationClient {
 		webhookURL: cfg.NotificationWebhookURL,
 		secret:     cfg.NotificationWebhookSecret,
 		portalURL:  cfg.FrontendURL,
-		launchURL:  cfg.MoodleOTASignLaunchURL,
 		httpClient: &http.Client{Timeout: 10 * time.Second},
 	}
 }
@@ -49,9 +47,6 @@ func (c *NotificationClient) Send(ctx context.Context, event NotificationEvent) 
 		event.Metadata = map[string]string{}
 	}
 	event.Metadata["portal_url"] = c.portalURL
-	if c.launchURL != "" {
-		event.Metadata["launch_url"] = c.launchURL
-	}
 
 	body, err := json.Marshal(event)
 	if err != nil {

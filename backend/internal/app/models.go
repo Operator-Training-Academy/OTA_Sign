@@ -2,38 +2,23 @@ package app
 
 import "time"
 
-type LaunchClaims struct {
-	MoodleUserID  string    `json:"moodle_user_id"`
-	FullName      string    `json:"full_name"`
-	FirstName     string    `json:"first_name,omitempty"`
-	LastName      string    `json:"last_name,omitempty"`
-	MiddleInitial string    `json:"middle_initial,omitempty"`
-	Email         string    `json:"email"`
-	ArmyEmail     string    `json:"army_email,omitempty"`
-	DoDID         string    `json:"dod_id,omitempty"`
-	Rank          string    `json:"rank,omitempty"`
-	UIC           string    `json:"uic"`
-	Roles         []string  `json:"roles"`
-	Capabilities  []string  `json:"capabilities"`
-	IssuedAt      time.Time `json:"issued_at"`
-	ExpiresAt     time.Time `json:"expires_at"`
-}
-
 type User struct {
-	ID            string   `json:"id"`
-	MoodleUserID  string   `json:"moodle_user_id"`
-	FullName      string   `json:"full_name"`
-	FirstName     string   `json:"first_name,omitempty"`
-	LastName      string   `json:"last_name,omitempty"`
-	MiddleInitial string   `json:"middle_initial,omitempty"`
-	Email         string   `json:"email"`
-	ArmyEmail     string   `json:"army_email,omitempty"`
-	DoDID         string   `json:"dod_id,omitempty"`
-	Rank          string   `json:"rank,omitempty"`
-	PayGrade      string   `json:"pay_grade,omitempty"`
-	UIC           string   `json:"uic"`
-	Roles         []string `json:"roles"`
-	Capabilities  []string `json:"capabilities"`
+	ID              string   `json:"id"`
+	IdentityUserID  string   `json:"identity_user_id"`
+	KeycloakIssuer  string   `json:"-"`
+	KeycloakSubject string   `json:"-"`
+	FullName        string   `json:"full_name"`
+	FirstName       string   `json:"first_name,omitempty"`
+	LastName        string   `json:"last_name,omitempty"`
+	MiddleInitial   string   `json:"middle_initial,omitempty"`
+	Email           string   `json:"email"`
+	ArmyEmail       string   `json:"army_email,omitempty"`
+	DoDID           string   `json:"dod_id,omitempty"`
+	Rank            string   `json:"rank,omitempty"`
+	PayGrade        string   `json:"pay_grade,omitempty"`
+	UIC             string   `json:"uic"`
+	Roles           []string `json:"roles"`
+	Capabilities    []string `json:"capabilities"`
 }
 
 type Template struct {
