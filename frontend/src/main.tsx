@@ -25,7 +25,7 @@ type ThemePreference = 'system' | 'light' | 'dark';
 
 type User = {
   id: string;
-  moodle_user_id: string;
+	  identity_user_id: string;
   full_name: string;
   email: string;
   dod_id?: string;

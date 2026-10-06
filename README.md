@@ -1,29 +1,25 @@
 # OTA Sign
 
-OTA Sign is a forms control portal authenticated by Keycloak, authorized by Moodle, and backed by DocuSeal for signing.
+OTA Sign is a forms control portal authenticated and authorized by Keycloak, and backed by DocuSeal for signing.
 
 The intended architecture is:
 
 ```text
 Keycloak
   -> OTA Sign backend (OIDC login)
-  -> Moodle LMS (SSO login)
 
 OTA Sign backend
-  -> OTA Sign Connector Moodle web service (capabilities only)
   -> OTA Sign frontend
   -> DocuSeal API/webhooks
 ```
 
-Keycloak remains the identity source. Moodle remains the OTA Sign authorization source. DocuSeal remains the signing engine. OTA Sign is the control layer for UIC-scoped access, form visibility, submissions, commander signatures, status tracking, downloads, and commander access lifecycle.
+Keycloak remains the identity and authorization source. DocuSeal remains the signing engine. OTA Sign is the control layer for UIC-scoped access, form visibility, submissions, commander signatures, status tracking, downloads, and commander access lifecycle.
 
 ## Repository Layout
 
 ```text
 backend/                    Go API service
 frontend/                   React + Vite dashboard
-moodle/local_otasignconnector/
-                            Moodle local plugin skeleton
 docs/                       Architecture and API notes
 ```
 
@@ -32,9 +28,9 @@ docs/                       Architecture and API notes
 The first milestone is:
 
 ```text
-User opens OTA Sign directly or through Moodle
+User opens OTA Sign
 -> OTA Sign validates Keycloak OIDC login
--> OTA Sign connector returns Moodle capabilities for the Keycloak DoD ID
+-> Keycloak client roles determine OTA Sign capabilities
 -> Backend creates session
 -> User lands on the right dashboard
 ```
@@ -83,9 +79,9 @@ OTASIGN_API_BASE_URL
 
 The backend image is a compiled Go binary and expects production env vars such
 as `DATABASE_URL`, `FRONTEND_URL`, `KEYCLOAK_ISSUER_URL`,
-`MOODLE_WEBSERVICE_URL`, `DOCUSEAL_API_KEY`, and webhook secrets. See
-[`docs/keycloak-setup.md`](docs/keycloak-setup.md) for the complete Keycloak,
-Moodle, and OTA Sign setup procedure.
+`KEYCLOAK_CLIENT_SECRET`, `DOCUSEAL_API_KEY`, and webhook secrets. See
+[`docs/keycloak-setup.md`](docs/keycloak-setup.md) for the complete Keycloak
+and OTA Sign setup procedure.
 
 ## Notification Webhook Demo
 
@@ -99,19 +95,3 @@ node scripts/send-demo-notification.js
 The script sends one `commander_signature_requested` payload and one
 `submission_completed` payload. If `NOTIFICATION_WEBHOOK_SECRET` is set, it
 signs requests with `X-OTA-Signature`.
-
-## Moodle Plugin
-
-The Moodle plugin skeleton lives at:
-
-```text
-moodle/local_otasignconnector
-```
-
-Install it into Moodle as:
-
-```text
-local/otasignconnector
-```
-
-Its user-facing name is **OTA Sign Connector**.

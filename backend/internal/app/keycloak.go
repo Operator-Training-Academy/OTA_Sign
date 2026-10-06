@@ -176,9 +176,14 @@ func userFromKeycloakClaims(cfg Config, issuer, subject string, claims map[strin
 		return User{}, errors.New("Keycloak token is missing a required OTA Sign identity claim")
 	}
 
+	capabilities := keycloakCapabilities(claims, cfg.KeycloakClientID)
+	if !hasAny(capabilities, "viewown") {
+		return User{}, errors.New("Keycloak does not grant OTA Sign access")
+	}
+
 	return User{
 		ID:              "keycloak-" + subject,
-		MoodleUserID:    "keycloak-" + subject,
+		IdentityUserID:  "keycloak-" + subject,
 		KeycloakIssuer:  issuer,
 		KeycloakSubject: subject,
 		FullName:        fullName,
@@ -189,7 +194,41 @@ func userFromKeycloakClaims(cfg Config, issuer, subject string, claims map[strin
 		DoDID:           dodID,
 		Rank:            claimString(claims, cfg.KeycloakRankClaim),
 		UIC:             uic,
+		Capabilities:    capabilities,
 	}, nil
+}
+
+func keycloakCapabilities(claims map[string]any, clientID string) []string {
+	resourceAccess, ok := claims["resource_access"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	clientAccess, ok := resourceAccess[clientID].(map[string]any)
+	if !ok {
+		return nil
+	}
+	roles, ok := clientAccess["roles"].([]any)
+	if !ok {
+		return nil
+	}
+
+	allowed := map[string]bool{
+		"viewown": true, "viewunit": true, "signascommander": true, "configure": true,
+	}
+	seen := map[string]bool{}
+	capabilities := make([]string, 0, len(roles))
+	for _, role := range roles {
+		name, ok := role.(string)
+		if !ok {
+			continue
+		}
+		name = strings.ToLower(strings.TrimSpace(name))
+		if allowed[name] && !seen[name] {
+			seen[name] = true
+			capabilities = append(capabilities, name)
+		}
+	}
+	return capabilities
 }
 
 func claimString(claims map[string]any, name string) string {

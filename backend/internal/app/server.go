@@ -26,7 +26,6 @@ type Server struct {
 	docuseal      *DocuSealClient
 	notifications *NotificationClient
 	keycloak      *KeycloakClient
-	moodleAccess  *MoodleAccessClient
 }
 
 func NewServer(cfg Config) (*Server, error) {
@@ -45,17 +44,14 @@ func NewServer(cfg Config) (*Server, error) {
 		docuseal:      NewDocuSealClient(cfg),
 		notifications: NewNotificationClient(cfg),
 	}
-	if cfg.AuthProvider == "keycloak" {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		keycloak, err := NewKeycloakClient(ctx, cfg)
-		if err != nil {
-			store.Close()
-			return nil, err
-		}
-		server.keycloak = keycloak
-		server.moodleAccess = NewMoodleAccessClient(cfg)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	keycloak, err := NewKeycloakClient(ctx, cfg)
+	if err != nil {
+		store.Close()
+		return nil, err
 	}
+	server.keycloak = keycloak
 
 	return server, nil
 }
@@ -66,12 +62,10 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /healthz", s.handleHealth)
 	mux.HandleFunc("GET /readyz", s.handleReady)
 	mux.HandleFunc("GET /healthz/full", s.handleFullHealth)
-	mux.HandleFunc("GET /launch", s.handleLaunch)
 	mux.HandleFunc("GET /auth/login", s.handleLogin)
 	mux.HandleFunc("GET /auth/keycloak/callback", s.handleKeycloakCallback)
 	mux.HandleFunc("POST /auth/logout", s.handleLogout)
 	mux.HandleFunc("POST /webhooks/docuseal", s.handleDocuSealWebhook)
-	mux.HandleFunc("POST /dev/launch-token", s.handleDevLaunchToken)
 	mux.HandleFunc("GET /api/me", s.withAuth(s.handleMe))
 	mux.HandleFunc("GET /api/templates", s.withAuth(s.handleTemplates))
 	mux.HandleFunc("POST /api/submissions", s.withAuth(s.handleCreateSubmission))
@@ -145,52 +139,7 @@ func (s *Server) handleFullHealth(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) handleLaunch(w http.ResponseWriter, r *http.Request) {
-	if s.cfg.AuthProvider != "moodle" {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "disabled"})
-		return
-	}
-	token := r.URL.Query().Get("token")
-	claims, err := VerifyLaunchToken(token, s.cfg.MoodleLaunchSigningSecret, time.Now().UTC())
-	if err != nil {
-		log.Printf("moodle launch rejected: %v", err)
-		http.Redirect(w, r, s.cfg.MoodleLoginURL, http.StatusFound)
-		return
-	}
-
-	user := User{
-		ID:            "moodle-" + claims.MoodleUserID,
-		MoodleUserID:  claims.MoodleUserID,
-		FullName:      formattedMilitaryName(claims),
-		FirstName:     claims.FirstName,
-		LastName:      claims.LastName,
-		MiddleInitial: claims.MiddleInitial,
-		Email:         claims.Email,
-		ArmyEmail:     validArmyEmail(claims.ArmyEmail),
-		DoDID:         claims.DoDID,
-		Rank:          claims.Rank,
-		UIC:           claims.UIC,
-		Roles:         claims.Roles,
-		Capabilities:  claims.Capabilities,
-	}
-	s.enrichPayGradeFromRank(r.Context(), &user)
-
-	sessionID := randomID()
-	if err := s.store.SaveSession(r.Context(), sessionID, user); err != nil {
-		log.Printf("save launch session failed: %v", err)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not start session"})
-		return
-	}
-	s.setSessionCookie(w, sessionID)
-
-	http.Redirect(w, r, s.cfg.FrontendURL+"/dashboard", http.StatusFound)
-}
-
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
-	if s.cfg.AuthProvider == "moodle" {
-		http.Redirect(w, r, s.cfg.MoodleLoginURL, http.StatusFound)
-		return
-	}
 	url, err := s.keycloak.authorizationURL(w)
 	if err != nil {
 		log.Printf("create Keycloak authorization request failed: %v", err)
@@ -201,10 +150,6 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleKeycloakCallback(w http.ResponseWriter, r *http.Request) {
-	if s.cfg.AuthProvider != "keycloak" {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "disabled"})
-		return
-	}
 	defer s.keycloak.clearState(w)
 	if providerError := strings.TrimSpace(r.URL.Query().Get("error")); providerError != "" {
 		log.Printf("Keycloak login rejected: %s", providerError)
@@ -218,19 +163,10 @@ func (s *Server) handleKeycloakCallback(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "Keycloak identity could not be verified"})
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
-	defer cancel()
-	capabilities, err := s.moodleAccess.Capabilities(ctx, user.DoDID)
-	if err != nil {
-		log.Printf("Moodle authorization lookup failed: %v", err)
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "Moodle did not authorize OTA Sign access"})
-		return
-	}
-	user.Capabilities = capabilities
-	s.enrichPayGradeFromRank(ctx, &user)
+	s.enrichPayGradeFromRank(r.Context(), &user)
 
 	sessionID := randomID()
-	if err := s.store.SaveSession(ctx, sessionID, user); err != nil {
+	if err := s.store.SaveSession(r.Context(), sessionID, user); err != nil {
 		log.Printf("save Keycloak session failed: %v", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not start session"})
 		return
@@ -257,41 +193,6 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 		MaxAge:   -1,
 	})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "signed out"})
-}
-
-func (s *Server) handleDevLaunchToken(w http.ResponseWriter, r *http.Request) {
-	if strings.ToLower(s.cfg.MoodleLaunchSigningSecret) != "dev-only-change-me" {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "disabled"})
-		return
-	}
-
-	now := time.Now().UTC()
-	claims := LaunchClaims{
-		MoodleUserID: "1001",
-		FullName:     "Demo Soldier",
-		FirstName:    "Demo",
-		LastName:     "Soldier",
-		Email:        "demo.soldier@example.mil",
-		ArmyEmail:    "demo.soldier@army.mil",
-		DoDID:        "1111222233",
-		Rank:         "SGT",
-		UIC:          "WABC12",
-		Roles:        []string{"student", "commander"},
-		Capabilities: []string{"viewown", "viewunit", "signascommander"},
-		IssuedAt:     now,
-		ExpiresAt:    now.Add(5 * time.Minute),
-	}
-
-	token, err := SignLaunchClaims(claims, s.cfg.MoodleLaunchSigningSecret)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not sign token"})
-		return
-	}
-
-	writeJSON(w, http.StatusOK, map[string]string{
-		"token":      token,
-		"launch_url": "/launch?token=" + token,
-	})
 }
 
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request, user User) {
@@ -374,7 +275,7 @@ func (s *Server) handleCreateSubmission(w http.ResponseWriter, r *http.Request, 
 			Values:     docusealPrefillValues(prefillUser),
 			Metadata: map[string]string{
 				"otasign_user_id":     user.ID,
-				"moodle_user_id":      user.MoodleUserID,
+				"identity_user_id":    user.IdentityUserID,
 				"uic":                 user.UIC,
 				"otasign_template_id": template.ID,
 				"otasign_signer_role": template.SoldierRoleName,
@@ -606,7 +507,7 @@ func (s *Server) handleCommanderSign(w http.ResponseWriter, r *http.Request, use
 		ExternalID: user.ID,
 		Metadata: map[string]string{
 			"otasign_user_id":       user.ID,
-			"moodle_user_id":        user.MoodleUserID,
+			"identity_user_id":      user.IdentityUserID,
 			"uic":                   user.UIC,
 			"otasign_submission_id": submission.ID,
 			"otasign_template_id":   submission.TemplateID,
@@ -1015,22 +916,6 @@ func (s *Server) enrichPayGradeFromRank(ctx context.Context, user *User) {
 	if ok {
 		user.PayGrade = payGrade
 	}
-}
-
-func formattedMilitaryName(claims LaunchClaims) string {
-	last := strings.TrimSpace(claims.LastName)
-	first := strings.TrimSpace(claims.FirstName)
-	mi := strings.Trim(strings.TrimSpace(claims.MiddleInitial), ".")
-
-	if last != "" && first != "" {
-		name := last + ", " + first
-		if mi != "" {
-			name += " " + strings.ToUpper(mi[:1]) + "."
-		}
-		return name
-	}
-
-	return strings.TrimSpace(claims.FullName)
 }
 
 func docusealPrefillValues(user User) map[string]string {

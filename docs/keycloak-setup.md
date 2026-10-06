@@ -1,67 +1,62 @@
-# Keycloak and Moodle Authorization Setup
+# Keycloak Setup
 
-OTA Sign authenticates users with Keycloak and obtains OTA Sign capabilities from Moodle. Keycloak must provide identity attributes; Moodle must only decide the capabilities.
+OTA Sign authenticates and authorizes users exclusively through Keycloak. Moodle is not part of the OTA Sign login or authorization flow.
 
-## 1. Configure Keycloak
+## Keycloak Client
 
-1. Create or select the realm used by Moodle.
-2. Create a confidential OpenID Connect client named `ota-sign`.
-3. Enable Standard Flow and disable Direct Access Grants and Implicit Flow.
-4. Set Valid Redirect URIs to `https://OTASIGN_HOST/auth/keycloak/callback`.
-5. Copy the client secret into the OTA Sign deployment secret `KEYCLOAK_CLIENT_SECRET`.
-6. Add client-scope mappers so the ID token contains these string claims:
+1. Create a confidential OpenID Connect client named `ota-sign` in the OTA realm.
+2. Enable Standard Flow and disable Direct Access Grants and Implicit Flow.
+3. Set the redirect URI to `https://OTASIGN_HOST/auth/keycloak/callback`.
+4. Save the client secret as OTA Sign's `KEYCLOAK_CLIENT_SECRET` deployment secret.
+5. Keep the built-in `basic`, `profile`, and `email` client scopes assigned to the client.
 
-```text
-name
-given_name
-family_name
-email
-dod_id
-uic
-rank
-army_email
-```
+## Identity Claims
 
-7. Ensure the `dod_id` value exactly matches the Moodle user's `idnumber`. It must be unique for active Moodle users.
-8. Configure Moodle to use this same Keycloak realm as its authentication source.
-
-OTA Sign rejects login when `name`, `email`, `dod_id`, or `uic` are missing. `rank` and `army_email` are optional.
-
-## 2. Install and Configure the Moodle Plugin
-
-1. Install or upgrade `moodle/local_otasignconnector` in Moodle.
-2. Complete the plugin upgrade so Moodle registers the `OTA Sign authorization service`.
-3. Go to Site administration > Plugins > Local plugins > OTA Sign Connector.
-4. Set OTA Sign login URL to `https://OTASIGN_HOST/auth/login`.
-5. Leave Legacy launch signing secret empty.
-6. Add a Moodle custom-menu link to `/local/otasignconnector/launch.php`.
-7. Assign Moodle roles/capabilities in the system context:
+In the `ota-sign` dedicated client scope, add User Attribute mappers that include these Keycloak user-profile attributes in the ID token:
 
 ```text
-local/otasignconnector:viewown
-local/otasignconnector:viewunit
-local/otasignconnector:signascommander
-local/otasignconnector:configure
+User attribute       Token claim
+dod_id               dod_id
+unit_uic             uic
+rank                 rank
+enterprise_email     army_email
 ```
 
-The connector finds the person by `user.idnumber` and returns only these capabilities. It does not return profile data to OTA Sign.
+Enable Add to ID token and Add to UserInfo for each mapper. The standard scopes provide `name`, `given_name`, `family_name`, and `email`.
 
-## 3. Create the Moodle Service Token
+## Authorization Roles
 
-1. Go to Site administration > Server > Web services > Overview and enable web services and the REST protocol.
-2. Go to External services and open `OTA Sign authorization service`.
-3. Authorize a dedicated service account. Do not use a human administrator account.
-4. Create a token for that account and this service.
-5. Store the token only as the OTA Sign secret `MOODLE_OTA_SIGN_SERVICE_TOKEN`.
-6. Restrict Moodle network access to the OTA Sign backend where infrastructure permits.
+Create these client roles on the `ota-sign` client:
 
-## 4. Configure OTA Sign
+```text
+viewown
+viewunit
+signascommander
+configure
+```
 
-Set these backend environment variables. Keep the two secret values in the deployment secret store, not Git or browser configuration.
+Add `viewown` as a composite of the realm's default role so every OTA realm user can view their own forms. Add `viewunit` as a composite of `signascommander`; this makes commander signing imply unit visibility without allowing unit viewers to sign.
+
+Configure the client's role mapper to include client roles in the ID token as:
+
+```json
+{
+  "resource_access": {
+    "ota-sign": {
+      "roles": ["viewown", "viewunit", "signascommander"]
+    }
+  }
+}
+```
+
+OTA Sign denies login unless the validated ID token includes `viewown`. The UIC claim scopes unit viewing and commander signing: a user with `uic=WABC12` can access only WABC12 submissions.
+
+## OTA Sign Configuration
+
+Set these backend deployment values. Do not expose the client secret to the browser or commit it to Git.
 
 ```env
-AUTH_PROVIDER=keycloak
-KEYCLOAK_ISSUER_URL=https://KEYCLOAK_HOST/realms/REALM
+KEYCLOAK_ISSUER_URL=https://KEYCLOAK_HOST/realms/ota
 KEYCLOAK_CLIENT_ID=ota-sign
 KEYCLOAK_CLIENT_SECRET=KEYCLOAK_CLIENT_SECRET
 KEYCLOAK_REDIRECT_URL=https://OTASIGN_HOST/auth/keycloak/callback
@@ -69,18 +64,15 @@ KEYCLOAK_DOD_ID_CLAIM=dod_id
 KEYCLOAK_UIC_CLAIM=uic
 KEYCLOAK_RANK_CLAIM=rank
 KEYCLOAK_ARMY_EMAIL_CLAIM=army_email
-MOODLE_WEBSERVICE_URL=https://MOODLE_HOST/webservice/rest/server.php
-MOODLE_OTA_SIGN_SERVICE_TOKEN=MOODLE_SERVICE_TOKEN
+SESSION_COOKIE_SECURE=true
+ENFORCE_HTTPS=true
 ```
 
-Set `SESSION_COOKIE_SECURE=true` and `ENFORCE_HTTPS=true` in production. Deploy the backend and frontend together because the frontend must proxy `/auth/` to the backend.
+## Verify
 
-## 5. Verify
-
-1. Visit `https://OTASIGN_HOST/auth/login` directly and complete Keycloak login.
-2. Confirm Keycloak returns to `/auth/keycloak/callback` and OTA Sign opens its dashboard.
-3. Confirm the Keycloak DoD ID matches exactly one active Moodle `idnumber`.
-4. Confirm a user with `viewown` can view personal forms.
-5. Confirm `viewunit` controls unit dashboard access and `signascommander` controls commander signing.
-6. Remove a capability in Moodle, sign out of OTA Sign, and sign in again. The feature must be denied.
-7. Confirm the Moodle custom-menu link takes an already logged-in Moodle user through Keycloak SSO without a second password prompt.
+1. Open `https://OTASIGN_HOST/auth/login`.
+2. Sign in with a user that has `viewown`.
+3. Confirm the dashboard shows the user's Keycloak name and UIC.
+4. Confirm a user with `viewunit` sees only their claim's UIC.
+5. Confirm a user with `signascommander` can sign only submissions for their claim's UIC.
+6. Confirm a user without `viewown` is denied without an OTA Sign session.
