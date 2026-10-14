@@ -54,7 +54,7 @@ func TestUserFromKeycloakClaimsRequiresOTAIdentity(t *testing.T) {
 		"family_name": "Example",
 		"email":       "jane.example@example.mil",
 		"dod_id":      "1234567890",
-		"uic":         "WABC12",
+		"uic":         " wabC12 ",
 		"rank":        "SGT",
 		"army_email":  "jane.example@army.mil",
 		"resource_access": map[string]any{
@@ -97,11 +97,18 @@ func TestSubmissionsForUICExcludesOtherUnits(t *testing.T) {
 		{ID: "current", UIC: "WABC12"},
 		{ID: "prior", UIC: "WXYZ99"},
 		{ID: "unassigned", UIC: ""},
+		{ID: "archived", UIC: "WABC12", Status: "archived"},
 	}
 
 	visible := submissionsForUIC(submissions, "WABC12")
 	if len(visible) != 1 || visible[0].ID != "current" {
 		t.Fatalf("expected only current-UIC submissions, got %#v", visible)
+	}
+}
+
+func TestNormalizeUIC(t *testing.T) {
+	if got := normalizeUIC(" wabC12 \n"); got != "WABC12" {
+		t.Fatalf("expected normalized UIC, got %q", got)
 	}
 }
 

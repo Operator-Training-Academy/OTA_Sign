@@ -804,7 +804,7 @@ func (s *Server) handleDeleteSubmission(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	submission, ok, err := s.store.SubmissionForUser(r.Context(), submissionID, user.ID)
+	submission, ok, err := s.store.SubmissionForUser(r.Context(), submissionID, user)
 	if err != nil {
 		log.Printf("load submission for delete failed: %v", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not load submission"})

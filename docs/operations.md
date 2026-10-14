@@ -38,6 +38,10 @@ OTA Sign production has these critical dependencies:
 9. In Moodle mode, launch from Moodle with a test account. In Keycloak mode, sign in with an account that has `viewown`.
 10. Create a DocuSeal submission, complete it, receive the webhook, and download the completed PDF through OTA Sign.
 
+## UIC Transfers
+
+OTA Sign normalizes identity UICs to uppercase trimmed values at login. When a user's identity UIC changes, OTA Sign removes their previous unit membership and archives any active submission assigned to a different UIC. Archived submissions are not visible through the portal and later DocuSeal status updates do not reactivate them.
+
 ## Reverse Proxy Routing
 
 The production reverse proxy can point `https://otaportal.operatortraining.academy` to:

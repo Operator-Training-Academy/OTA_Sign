@@ -164,7 +164,7 @@ func (c *KeycloakClient) readState(r *http.Request) (oidcState, error) {
 
 func userFromKeycloakClaims(cfg Config, issuer, subject string, claims map[string]any) (User, error) {
 	dodID := claimString(claims, cfg.KeycloakDoDIDClaim)
-	uic := claimString(claims, cfg.KeycloakUICClaim)
+	uic := normalizeUIC(claimString(claims, cfg.KeycloakUICClaim))
 	email := claimString(claims, "email")
 	fullName := claimString(claims, "name")
 	firstName := claimString(claims, "given_name")

@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.1] - 2026-10-14
+
+### Fixed
+
+- Archive active submissions when a user's identity UIC changes, preventing prior-unit work from appearing in the new unit.
+- Restrict all user-facing submission access, including downloads and pending-status refreshes, to the user's current UIC.
+
 ## [1.1.0] - 2026-10-14
 
 ### Added

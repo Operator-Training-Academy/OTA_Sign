@@ -1,6 +1,9 @@
 package app
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 type User struct {
 	ID              string   `json:"id"`
@@ -36,6 +39,10 @@ type LaunchClaims struct {
 	Capabilities  []string  `json:"capabilities"`
 	IssuedAt      time.Time `json:"issued_at"`
 	ExpiresAt     time.Time `json:"expires_at"`
+}
+
+func normalizeUIC(value string) string {
+	return strings.ToUpper(strings.TrimSpace(value))
 }
 
 type Template struct {

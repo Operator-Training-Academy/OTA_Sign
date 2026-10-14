@@ -190,6 +190,21 @@ func (s *Store) SaveSession(ctx context.Context, sessionID string, user User) er
 	`, user.IdentityUserID, user.KeycloakIssuer, user.KeycloakSubject, user.FullName, user.FirstName, user.LastName, user.MiddleInitial, user.Email, user.ArmyEmail, user.DoDID, user.Rank, user.PayGrade).Scan(&userID); err != nil {
 		return err
 	}
+	// A submission stays with the UIC it was created for. A new identity UIC
+	// archives any active work left in a prior unit before membership changes.
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE submissions s
+		SET status = 'archived',
+			current = false,
+			updated_at = now()
+		FROM units un
+		WHERE s.soldier_user_id = $1::uuid
+		  AND s.unit_id = un.id
+		  AND s.current = true
+		  AND upper(trim(un.uic)) <> $2
+	`, userID, user.UIC); err != nil {
+		return err
+	}
 	// The current identity claims are authoritative for this login. Do not leave
 	// revoked capabilities or a previous UIC attached to a new session.
 	if _, err := tx.ExecContext(ctx, `
@@ -200,12 +215,21 @@ func (s *Store) SaveSession(ctx context.Context, sessionID string, user User) er
 	}
 
 	var unitID string
-	if err := tx.QueryRowContext(ctx, `
-		INSERT INTO units (uic)
-		VALUES ($1)
-		ON CONFLICT (uic) DO UPDATE SET updated_at = now()
-		RETURNING id::text
-	`, user.UIC).Scan(&unitID); err != nil {
+	err = tx.QueryRowContext(ctx, `
+		SELECT id::text
+		FROM units
+		WHERE upper(trim(uic)) = $1
+		LIMIT 1
+	`, user.UIC).Scan(&unitID)
+	if errors.Is(err, sql.ErrNoRows) {
+		err = tx.QueryRowContext(ctx, `
+			INSERT INTO units (uic)
+			VALUES ($1)
+			ON CONFLICT (uic) DO UPDATE SET updated_at = now()
+			RETURNING id::text
+		`, user.UIC).Scan(&unitID)
+	}
+	if err != nil {
 		return err
 	}
 
@@ -265,7 +289,7 @@ func (s *Store) UserForSession(ctx context.Context, sessionID string) (User, boo
 			coalesce(u.dod_id, ''),
 			coalesce(u.rank, ''),
 			coalesce(u.pay_grade, ''),
-			un.uic,
+			upper(trim(un.uic)),
 			s.roles,
 			s.capabilities
 		FROM sessions s
@@ -478,7 +502,7 @@ func (s *Store) CreateSubmission(ctx context.Context, user User, template Templa
 	if err := tx.QueryRowContext(ctx, `
 		SELECT id::text
 		FROM units
-		WHERE uic = $1
+		WHERE upper(trim(uic)) = $1
 	`, user.UIC).Scan(&unitID); err != nil {
 		return Submission{}, err
 	}
@@ -578,7 +602,7 @@ func (s *Store) MySubmissions(ctx context.Context, user User) ([]Submission, err
 		return nil, err
 	}
 
-	submissions, err := s.submissionsForUser(ctx, user.ID)
+	submissions, err := s.submissionsForUserInUIC(ctx, user.ID, user.UIC)
 	if err != nil {
 		return nil, err
 	}
@@ -594,11 +618,8 @@ func (s *Store) PendingDocuSealSubmissionIDs(ctx context.Context, user User) ([]
 		WHERE s.current = true
 		  AND s.status = 'pending'
 		  AND s.docuseal_submission_id IS NOT NULL
-		  AND (
-			s.soldier_user_id = $1::uuid
-			OR un.uic = $2
-		  )
-	`, user.ID, user.UIC)
+		  AND upper(trim(un.uic)) = $1
+	`, user.UIC)
 	if err != nil {
 		return nil, err
 	}
@@ -630,6 +651,7 @@ func (s *Store) UpdateDocuSealSubmissionStatus(ctx context.Context, docusealSubm
 			completed_at = %s,
 			updated_at = now()
 		WHERE docuseal_submission_id = $3
+		  AND status <> 'archived'
 	`, completedAtSQL), status, current, docusealSubmissionID)
 	return err
 }
@@ -717,7 +739,7 @@ func (s *Store) NotificationSubmissionByDocuSealID(ctx context.Context, docuseal
 			u.full_name,
 			u.email,
 			coalesce(u.dod_id, ''),
-			un.uic,
+			upper(trim(un.uic)),
 			s.status,
 			t.requires_commander_signature,
 			coalesce(s.docuseal_submission_id, '')
@@ -726,6 +748,7 @@ func (s *Store) NotificationSubmissionByDocuSealID(ctx context.Context, docuseal
 		JOIN users u ON u.id = s.soldier_user_id
 		JOIN units un ON un.id = s.unit_id
 		WHERE s.docuseal_submission_id = $1
+		  AND s.status <> 'archived'
 	`, docusealSubmissionID).Scan(
 		&submission.ID,
 		&submission.TemplateID,
@@ -793,7 +816,7 @@ func (s *Store) CommanderRecipientsForUIC(ctx context.Context, uic string) ([]No
 			FROM users u
 			JOIN user_unit_roles uur ON uur.user_id = u.id
 			JOIN units un ON un.id = uur.unit_id
-			WHERE un.uic = $1
+			WHERE upper(trim(un.uic)) = $1
 			  AND lower(uur.role) = 'capability:signascommander'
 		)
 		SELECT DISTINCT
@@ -860,7 +883,7 @@ func (s *Store) PayGradeForRank(ctx context.Context, rank string) (string, bool,
 	return payGrades[0], true, nil
 }
 
-func (s *Store) SubmissionForUser(ctx context.Context, submissionID string, userID string) (Submission, bool, error) {
+func (s *Store) SubmissionForUser(ctx context.Context, submissionID string, user User) (Submission, bool, error) {
 	var submission Submission
 
 	err := s.db.QueryRowContext(ctx, `
@@ -869,10 +892,13 @@ func (s *Store) SubmissionForUser(ctx context.Context, submissionID string, user
 			status,
 			current,
 			coalesce(docuseal_submission_id, '')
-		FROM submissions
-		WHERE id = $1::uuid
-		  AND soldier_user_id = $2::uuid
-	`, submissionID, userID).Scan(
+		FROM submissions s
+		JOIN units un ON un.id = s.unit_id
+		WHERE s.id = $1::uuid
+		  AND s.soldier_user_id = $2::uuid
+		  AND upper(trim(un.uic)) = $3
+		  AND s.status <> 'archived'
+	`, submissionID, user.ID, user.UIC).Scan(
 		&submission.ID,
 		&submission.Status,
 		&submission.Current,
@@ -903,12 +929,11 @@ func (s *Store) SubmissionDownloadForUser(ctx context.Context, submissionID stri
 		JOIN users u ON u.id = s.soldier_user_id
 		JOIN units un ON un.id = s.unit_id
 		WHERE s.id = $1::uuid
+		  AND upper(trim(un.uic)) = $3
+		  AND s.status <> 'archived'
 		  AND (
 			s.soldier_user_id = $2::uuid
-			OR (
-				un.uic = $3
-				AND $4
-			)
+			OR $4
 		  )
 	`, submissionID, user.ID, user.UIC, hasAny(user.Capabilities, "viewunit")).Scan(
 		&download.SubmissionID,
@@ -939,10 +964,11 @@ func (s *Store) SoldierSubmissionDownloadsForUser(ctx context.Context, soldierUs
 		JOIN user_unit_roles uur ON uur.user_id = u.id
 		JOIN units un ON un.id = uur.unit_id
 		LEFT JOIN submissions s ON s.soldier_user_id = u.id
+			AND s.unit_id = un.id
 			AND s.status = 'complete'
 		LEFT JOIN templates t ON t.id = s.template_id
 		WHERE u.id = $1::uuid
-		  AND un.uic = $2
+		  AND upper(trim(un.uic)) = $2
 		  AND $3
 		ORDER BY t.name NULLS LAST
 	`, soldierUserID, user.UIC, hasAny(user.Capabilities, "viewunit"))
@@ -998,7 +1024,7 @@ func (s *Store) CommanderSignerForSubmission(ctx context.Context, submissionID s
 			u.id::text,
 			u.full_name,
 			coalesce(u.dod_id, ''),
-			un.uic,
+			upper(trim(un.uic)),
 			s.status,
 			s.current,
 			t.requires_commander_signature,
@@ -1010,7 +1036,7 @@ func (s *Store) CommanderSignerForSubmission(ctx context.Context, submissionID s
 		JOIN units un ON un.id = s.unit_id
 		JOIN submission_signers ss ON ss.submission_id = s.id
 		WHERE s.id = $1::uuid
-		  AND un.uic = $2
+		  AND upper(trim(un.uic)) = $2
 		  AND s.status = 'pending'
 		  AND s.current = true
 		  AND t.requires_commander_signature = true
@@ -1095,7 +1121,7 @@ func (s *Store) UnitSubmissionGroups(ctx context.Context, user User, search stri
 		FROM users u
 		JOIN user_unit_roles uur ON uur.user_id = u.id
 		JOIN units un ON un.id = uur.unit_id
-		WHERE un.uic = $1
+		WHERE upper(trim(un.uic)) = $1
 		GROUP BY u.id, u.full_name, u.dod_id
 		ORDER BY u.full_name
 	`, user.UIC)
@@ -1138,15 +1164,11 @@ func (s *Store) UnitSubmissionGroups(ctx context.Context, user User, search stri
 	return filterUnitGroups(groups, search), nil
 }
 
-func (s *Store) submissionsForUser(ctx context.Context, userID string) ([]Submission, error) {
-	return s.submissionsForUserWithScope(ctx, userID, "", false)
-}
-
 func (s *Store) submissionsForUserInUIC(ctx context.Context, userID string, uic string) ([]Submission, error) {
-	return s.submissionsForUserWithScope(ctx, userID, uic, true)
+	return s.submissionsForUserWithScope(ctx, userID, uic)
 }
 
-func (s *Store) submissionsForUserWithScope(ctx context.Context, userID string, uic string, requireUIC bool) ([]Submission, error) {
+func (s *Store) submissionsForUserWithScope(ctx context.Context, userID string, uic string) ([]Submission, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT
 			s.id::text,
@@ -1155,7 +1177,7 @@ func (s *Store) submissionsForUserWithScope(ctx context.Context, userID string, 
 			u.id::text,
 			u.full_name,
 			coalesce(u.dod_id, ''),
-			un.uic,
+			upper(trim(un.uic)),
 			s.status,
 			s.current,
 			t.requires_commander_signature,
@@ -1182,9 +1204,10 @@ func (s *Store) submissionsForUserWithScope(ctx context.Context, userID string, 
 		JOIN users u ON u.id = s.soldier_user_id
 		JOIN units un ON un.id = s.unit_id
 		WHERE s.soldier_user_id = $1::uuid
-		  AND (NOT $3 OR un.uic = $2)
+		  AND upper(trim(un.uic)) = $2
+		  AND s.status <> 'archived'
 		ORDER BY s.created_at DESC
-	`, userID, uic, requireUIC)
+	`, userID, uic)
 	if err != nil {
 		return nil, err
 	}
@@ -1221,7 +1244,7 @@ func (s *Store) submissionsForUserWithScope(ctx context.Context, userID string, 
 func submissionsForUIC(submissions []Submission, uic string) []Submission {
 	visible := make([]Submission, 0, len(submissions))
 	for _, submission := range submissions {
-		if submission.UIC == uic {
+		if submission.UIC == uic && submission.Status != "archived" {
 			visible = append(visible, submission)
 		}
 	}
