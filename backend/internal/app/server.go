@@ -44,14 +44,16 @@ func NewServer(cfg Config) (*Server, error) {
 		docuseal:      NewDocuSealClient(cfg),
 		notifications: NewNotificationClient(cfg),
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	keycloak, err := NewKeycloakClient(ctx, cfg)
-	if err != nil {
-		store.Close()
-		return nil, err
+	if cfg.AuthProvider == "keycloak" {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		keycloak, err := NewKeycloakClient(ctx, cfg)
+		if err != nil {
+			store.Close()
+			return nil, err
+		}
+		server.keycloak = keycloak
 	}
-	server.keycloak = keycloak
 
 	return server, nil
 }
@@ -62,6 +64,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /healthz", s.handleHealth)
 	mux.HandleFunc("GET /readyz", s.handleReady)
 	mux.HandleFunc("GET /healthz/full", s.handleFullHealth)
+	mux.HandleFunc("GET /launch", s.handleLaunch)
 	mux.HandleFunc("GET /auth/login", s.handleLogin)
 	mux.HandleFunc("GET /auth/keycloak/callback", s.handleKeycloakCallback)
 	mux.HandleFunc("POST /auth/logout", s.handleLogout)
@@ -140,6 +143,10 @@ func (s *Server) handleFullHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.AuthProvider == "moodle" {
+		http.Redirect(w, r, s.cfg.MoodleLoginURL, http.StatusFound)
+		return
+	}
 	url, err := s.keycloak.authorizationURL(w)
 	if err != nil {
 		log.Printf("create Keycloak authorization request failed: %v", err)
@@ -149,7 +156,55 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, url, http.StatusFound)
 }
 
+func (s *Server) handleLaunch(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.AuthProvider != "moodle" {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "disabled"})
+		return
+	}
+
+	claims, err := VerifyLaunchToken(r.URL.Query().Get("token"), s.cfg.MoodleLaunchSigningSecret, time.Now().UTC())
+	if err != nil {
+		log.Printf("Moodle launch rejected: %v", err)
+		http.Redirect(w, r, s.cfg.MoodleLoginURL, http.StatusFound)
+		return
+	}
+	if claims.MoodleUserID == "" || claims.FullName == "" || claims.Email == "" || claims.UIC == "" || !hasAny(claims.Capabilities, "viewown") {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "Moodle launch is missing required OTA Sign access"})
+		return
+	}
+
+	user := User{
+		ID:             "moodle-" + claims.MoodleUserID,
+		IdentityUserID: "moodle-" + claims.MoodleUserID,
+		FullName:       formattedMilitaryName(claims),
+		FirstName:      claims.FirstName,
+		LastName:       claims.LastName,
+		MiddleInitial:  claims.MiddleInitial,
+		Email:          claims.Email,
+		ArmyEmail:      validArmyEmail(claims.ArmyEmail),
+		DoDID:          claims.DoDID,
+		Rank:           claims.Rank,
+		UIC:            claims.UIC,
+		Roles:          claims.Roles,
+		Capabilities:   claims.Capabilities,
+	}
+	s.enrichPayGradeFromRank(r.Context(), &user)
+
+	sessionID := randomID()
+	if err := s.store.SaveSession(r.Context(), sessionID, user); err != nil {
+		log.Printf("save Moodle launch session failed: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not start session"})
+		return
+	}
+	s.setSessionCookie(w, sessionID)
+	http.Redirect(w, r, s.cfg.FrontendURL+"/dashboard", http.StatusFound)
+}
+
 func (s *Server) handleKeycloakCallback(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.AuthProvider != "keycloak" {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "disabled"})
+		return
+	}
 	defer s.keycloak.clearState(w)
 	if providerError := strings.TrimSpace(r.URL.Query().Get("error")); providerError != "" {
 		log.Printf("Keycloak login rejected: %s", providerError)
@@ -173,6 +228,20 @@ func (s *Server) handleKeycloakCallback(w http.ResponseWriter, r *http.Request) 
 	}
 	s.setSessionCookie(w, sessionID)
 	http.Redirect(w, r, s.cfg.FrontendURL+"/dashboard", http.StatusFound)
+}
+
+func formattedMilitaryName(claims LaunchClaims) string {
+	last := strings.TrimSpace(claims.LastName)
+	first := strings.TrimSpace(claims.FirstName)
+	mi := strings.Trim(strings.TrimSpace(claims.MiddleInitial), ".")
+	if last != "" && first != "" {
+		name := last + ", " + first
+		if mi != "" {
+			name += " " + strings.ToUpper(mi[:1]) + "."
+		}
+		return name
+	}
+	return strings.TrimSpace(claims.FullName)
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {

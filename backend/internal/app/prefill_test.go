@@ -1,6 +1,9 @@
 package app
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestDocuSealPrefillValuesNameRankOrdering(t *testing.T) {
 	values := docusealPrefillValues(User{
@@ -99,5 +102,32 @@ func TestSubmissionsForUICExcludesOtherUnits(t *testing.T) {
 	visible := submissionsForUIC(submissions, "WABC12")
 	if len(visible) != 1 || visible[0].ID != "current" {
 		t.Fatalf("expected only current-UIC submissions, got %#v", visible)
+	}
+}
+
+func TestMoodleLaunchToken(t *testing.T) {
+	now := time.Now().UTC()
+	claims := LaunchClaims{MoodleUserID: "123", FullName: "Example, Jane", Email: "jane@example.mil", UIC: "WABC12", Capabilities: []string{"viewown"}, ExpiresAt: now.Add(time.Minute)}
+	token, err := SignLaunchClaims(claims, "test-secret")
+	if err != nil {
+		t.Fatalf("sign launch claims: %v", err)
+	}
+
+	verified, err := VerifyLaunchToken(token, "test-secret", now)
+	if err != nil || verified.MoodleUserID != claims.MoodleUserID {
+		t.Fatalf("verify launch claims: claims=%#v err=%v", verified, err)
+	}
+	if _, err := VerifyLaunchToken(token, "wrong-secret", now); err == nil {
+		t.Fatal("expected invalid signature to be rejected")
+	}
+	if _, err := VerifyLaunchToken(token, "test-secret", now.Add(2*time.Minute)); err == nil {
+		t.Fatal("expected expired token to be rejected")
+	}
+}
+
+func TestMoodleConfigDoesNotRequireKeycloak(t *testing.T) {
+	cfg := Config{AuthProvider: "moodle", MoodleLoginURL: "https://moodle.example.mil/login/index.php", MoodleLaunchSigningSecret: "test-secret"}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("expected Moodle configuration to be valid without Keycloak: %v", err)
 	}
 }

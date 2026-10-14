@@ -1,19 +1,19 @@
 # OTA Sign
 
-OTA Sign is a forms control portal authenticated and authorized by Keycloak, and backed by DocuSeal for signing.
+OTA Sign is a forms control portal backed by DocuSeal for signing. It supports a temporary Moodle signed-launch provider and Keycloak OIDC authorization.
 
 The intended architecture is:
 
 ```text
-Keycloak
-  -> OTA Sign backend (OIDC login)
+Moodle or Keycloak
+  -> OTA Sign backend
 
 OTA Sign backend
   -> OTA Sign frontend
   -> DocuSeal API/webhooks
 ```
 
-Keycloak remains the identity and authorization source. DocuSeal remains the signing engine. OTA Sign is the control layer for UIC-scoped access, form visibility, submissions, commander signatures, status tracking, downloads, and commander access lifecycle.
+Keycloak is the target identity and authorization source; Moodle signed launch is retained temporarily for compatibility. DocuSeal remains the signing engine. OTA Sign is the control layer for UIC-scoped access, form visibility, submissions, commander signatures, status tracking, downloads, and commander access lifecycle.
 
 ## Repository Layout
 

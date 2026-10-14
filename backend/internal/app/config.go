@@ -10,6 +10,9 @@ type Config struct {
 	AppEnv                    string
 	HTTPAddr                  string
 	FrontendURL               string
+	AuthProvider              string
+	MoodleLoginURL            string
+	MoodleLaunchSigningSecret string
 	KeycloakIssuerURL         string
 	KeycloakClientID          string
 	KeycloakClientSecret      string
@@ -37,6 +40,9 @@ func LoadConfig() Config {
 		AppEnv:                    env("APP_ENV", "development"),
 		HTTPAddr:                  env("HTTP_ADDR", ":8080"),
 		FrontendURL:               strings.TrimRight(env("FRONTEND_URL", "http://localhost:5173"), "/"),
+		AuthProvider:              strings.ToLower(env("AUTH_PROVIDER", "keycloak")),
+		MoodleLoginURL:            env("MOODLE_LOGIN_URL", ""),
+		MoodleLaunchSigningSecret: env("MOODLE_LAUNCH_SIGNING_SECRET", ""),
 		KeycloakIssuerURL:         strings.TrimRight(env("KEYCLOAK_ISSUER_URL", ""), "/"),
 		KeycloakClientID:          env("KEYCLOAK_CLIENT_ID", ""),
 		KeycloakClientSecret:      env("KEYCLOAK_CLIENT_SECRET", ""),
@@ -61,8 +67,14 @@ func LoadConfig() Config {
 }
 
 func (c Config) Validate() error {
-	if c.KeycloakIssuerURL == "" || c.KeycloakClientID == "" || c.KeycloakClientSecret == "" || c.KeycloakRedirectURL == "" {
-		return configError("KEYCLOAK_ISSUER_URL, KEYCLOAK_CLIENT_ID, KEYCLOAK_CLIENT_SECRET, and KEYCLOAK_REDIRECT_URL are required")
+	if c.AuthProvider != "moodle" && c.AuthProvider != "keycloak" {
+		return configError("AUTH_PROVIDER must be moodle or keycloak")
+	}
+	if c.AuthProvider == "keycloak" && (c.KeycloakIssuerURL == "" || c.KeycloakClientID == "" || c.KeycloakClientSecret == "" || c.KeycloakRedirectURL == "") {
+		return configError("KEYCLOAK_ISSUER_URL, KEYCLOAK_CLIENT_ID, KEYCLOAK_CLIENT_SECRET, and KEYCLOAK_REDIRECT_URL are required when AUTH_PROVIDER=keycloak")
+	}
+	if c.AuthProvider == "moodle" && (c.MoodleLoginURL == "" || c.MoodleLaunchSigningSecret == "") {
+		return configError("MOODLE_LOGIN_URL and MOODLE_LAUNCH_SIGNING_SECRET are required when AUTH_PROVIDER=moodle")
 	}
 	if strings.EqualFold(c.AppEnv, "production") {
 		if c.DatabaseURL == "" {
@@ -71,8 +83,11 @@ func (c Config) Validate() error {
 		if c.FrontendURL == "" || !strings.HasPrefix(c.FrontendURL, "https://") || strings.HasPrefix(c.FrontendURL, "http://localhost") {
 			return configError("FRONTEND_URL must be a production HTTPS URL")
 		}
-		if !strings.HasPrefix(c.KeycloakIssuerURL, "https://") || !strings.HasPrefix(c.KeycloakRedirectURL, "https://") {
+		if c.AuthProvider == "keycloak" && (!strings.HasPrefix(c.KeycloakIssuerURL, "https://") || !strings.HasPrefix(c.KeycloakRedirectURL, "https://")) {
 			return configError("Keycloak issuer and redirect URLs must use HTTPS in production")
+		}
+		if c.AuthProvider == "moodle" && (!strings.HasPrefix(c.MoodleLoginURL, "https://") || c.MoodleLaunchSigningSecret == "dev-only-change-me") {
+			return configError("MOODLE_LOGIN_URL must use HTTPS and MOODLE_LAUNCH_SIGNING_SECRET must be a production secret")
 		}
 		if !c.SessionCookieSecure {
 			return configError("SESSION_COOKIE_SECURE must be true in production")

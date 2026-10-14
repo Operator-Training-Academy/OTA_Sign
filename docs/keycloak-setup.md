@@ -1,6 +1,12 @@
 # Keycloak Setup
 
-OTA Sign authenticates and authorizes users exclusively through Keycloak. Moodle is not part of the OTA Sign login or authorization flow.
+OTA Sign supports Keycloak as the target identity and authorization provider. Until the production Keycloak client is ready, use the temporary Moodle signed-launch mode documented below.
+
+## Temporary Moodle Mode
+
+Set `AUTH_PROVIDER=moodle`, `MOODLE_LOGIN_URL`, and `MOODLE_LAUNCH_SIGNING_SECRET` in the backend deployment. The installed Moodle OTA Sign Connector must use the same signing secret and launch URL `https://OTASIGN_HOST/launch`.
+
+Moodle mode is a temporary compatibility path. It does not use Keycloak and should be switched explicitly to `AUTH_PROVIDER=keycloak` only after the Keycloak checks in this document pass.
 
 ## Keycloak Client
 

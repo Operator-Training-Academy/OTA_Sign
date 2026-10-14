@@ -7,7 +7,7 @@ OTA Sign production has these critical dependencies:
 - OTA Sign backend container
 - OTA Sign frontend container
 - PostgreSQL database
-- Keycloak OIDC client and role mappings
+- Keycloak OIDC client and role mappings, or the temporary Moodle connector
 - DocuSeal API and webhooks
 - Reverse proxy / TLS entrypoint
 - Optional notification webhook target
@@ -20,11 +20,10 @@ OTA Sign production has these critical dependencies:
 4. Confirm GHCR images exist for the intended `OTASIGN_IMAGE_TAG`.
 5. Set production stack variables in Portainer or the deployment environment:
    - `OTASIGN_IMAGE_TAG`
-   - `OTASIGN_FRONTEND_URL` for the OTA Sign public URL, also used as frontend `OTASIGN_API_BASE_URL` when backend routes share the same host
-    - `KEYCLOAK_ISSUER_URL`
-    - `KEYCLOAK_CLIENT_ID`
-    - `KEYCLOAK_CLIENT_SECRET`
-    - `KEYCLOAK_REDIRECT_URL`
+    - `OTASIGN_FRONTEND_URL` for the OTA Sign public URL, also used as frontend `OTASIGN_API_BASE_URL` when backend routes share the same host
+    - `AUTH_PROVIDER` set to `moodle` or `keycloak`
+    - `MOODLE_LOGIN_URL` and `MOODLE_LAUNCH_SIGNING_SECRET` when using temporary Moodle mode
+    - `KEYCLOAK_ISSUER_URL`, `KEYCLOAK_CLIENT_ID`, `KEYCLOAK_CLIENT_SECRET`, and `KEYCLOAK_REDIRECT_URL` when using Keycloak mode
    - `DATABASE_URL`
    - `DOCUSEAL_URL`
    - `DOCUSEAL_PUBLIC_URL`
@@ -36,7 +35,7 @@ OTA Sign production has these critical dependencies:
 6. Deploy `docker-compose.prod.example.yml` as the production stack.
 7. Confirm `/readyz` returns `200`.
 8. Confirm `/healthz/full` reports database and DocuSeal status.
-9. Sign in through Keycloak with a test account that has `viewown`.
+9. In Moodle mode, launch from Moodle with a test account. In Keycloak mode, sign in with an account that has `viewown`.
 10. Create a DocuSeal submission, complete it, receive the webhook, and download the completed PDF through OTA Sign.
 
 ## Reverse Proxy Routing
@@ -118,6 +117,7 @@ Recovery drill:
 Review backend logs for:
 
 - `Keycloak login rejected`
+- `Moodle launch rejected`
 - `docuseal template sync failed`
 - `docuseal create submission failed`
 - `docuseal webhook rejected`
@@ -160,6 +160,13 @@ Keycloak client secret:
 3. Redeploy backend.
 4. Sign in through Keycloak and confirm a session starts.
 
+Moodle launch signing secret:
+
+1. Generate a new high-entropy secret.
+2. Update `MOODLE_LAUNCH_SIGNING_SECRET` in the backend stack and Moodle connector settings together.
+3. Redeploy backend.
+4. Launch from Moodle and confirm a session starts.
+
 DocuSeal API key:
 
 1. Create a new DocuSeal API key.
@@ -196,7 +203,7 @@ Bad deployment:
 1. Set `OTASIGN_IMAGE_TAG` to the last known good image tag.
 2. Redeploy the stack.
 3. Confirm health endpoints.
-4. Run a Keycloak login smoke test with `viewown` and a denial test without it.
+4. Run the active provider's login smoke test. For Keycloak, verify `viewown` access and denial without it. For Moodle, verify a signed Moodle launch.
 
 Database loss:
 
