@@ -1116,11 +1116,12 @@ func (s *Store) UnitSubmissionGroups(ctx context.Context, user User, search stri
 			return nil, err
 		}
 
-		submissions, err := s.submissionsForUser(ctx, groupUser.ID)
+		submissions, err := s.submissionsForUserInUIC(ctx, groupUser.ID, user.UIC)
 		if err != nil {
 			return nil, err
 		}
 
+		submissions = submissionsForUIC(submissions, user.UIC)
 		visibleSubmissions := withoutCanceledSubmissions(submissions)
 		groups = append(groups, SoldierSubmissionGroup{
 			SoldierUserID: groupUser.ID,
@@ -1138,6 +1139,14 @@ func (s *Store) UnitSubmissionGroups(ctx context.Context, user User, search stri
 }
 
 func (s *Store) submissionsForUser(ctx context.Context, userID string) ([]Submission, error) {
+	return s.submissionsForUserWithScope(ctx, userID, "", false)
+}
+
+func (s *Store) submissionsForUserInUIC(ctx context.Context, userID string, uic string) ([]Submission, error) {
+	return s.submissionsForUserWithScope(ctx, userID, uic, true)
+}
+
+func (s *Store) submissionsForUserWithScope(ctx context.Context, userID string, uic string, requireUIC bool) ([]Submission, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT
 			s.id::text,
@@ -1173,8 +1182,9 @@ func (s *Store) submissionsForUser(ctx context.Context, userID string) ([]Submis
 		JOIN users u ON u.id = s.soldier_user_id
 		JOIN units un ON un.id = s.unit_id
 		WHERE s.soldier_user_id = $1::uuid
+		  AND (NOT $3 OR un.uic = $2)
 		ORDER BY s.created_at DESC
-	`, userID)
+	`, userID, uic, requireUIC)
 	if err != nil {
 		return nil, err
 	}
@@ -1206,6 +1216,16 @@ func (s *Store) submissionsForUser(ctx context.Context, userID string) ([]Submis
 	}
 
 	return submissions, rows.Err()
+}
+
+func submissionsForUIC(submissions []Submission, uic string) []Submission {
+	visible := make([]Submission, 0, len(submissions))
+	for _, submission := range submissions {
+		if submission.UIC == uic {
+			visible = append(visible, submission)
+		}
+	}
+	return visible
 }
 
 func prefixedValues(prefix string, values []string) []string {

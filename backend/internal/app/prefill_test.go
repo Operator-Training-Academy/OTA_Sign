@@ -88,3 +88,16 @@ func TestUserFromKeycloakClaimsRequiresViewOwnRole(t *testing.T) {
 		t.Fatal("expected Keycloak user without viewown to be rejected")
 	}
 }
+
+func TestSubmissionsForUICExcludesOtherUnits(t *testing.T) {
+	submissions := []Submission{
+		{ID: "current", UIC: "WABC12"},
+		{ID: "prior", UIC: "WXYZ99"},
+		{ID: "unassigned", UIC: ""},
+	}
+
+	visible := submissionsForUIC(submissions, "WABC12")
+	if len(visible) != 1 || visible[0].ID != "current" {
+		t.Fatalf("expected only current-UIC submissions, got %#v", visible)
+	}
+}
